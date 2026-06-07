@@ -59,7 +59,7 @@ controller_server:
       wz_max: 1.9
       iteration_count: 1
       prune_distance: 1.7
-      transform_tolerance: 0.1
+      transform_tolerance: 0.3
       temperature: 0.3
       gamma: 0.015
       motion_model: "DiffDrive"
@@ -261,7 +261,7 @@ behavior_server:
     global_frame: map
     local_frame: odom
     robot_base_frame: base_link
-    transform_tolerance: 0.1
+    transform_tolerance: 0.3
     simulate_ahead_time: 2.0
     max_rotational_vel: 1.0
     min_rotational_vel: 0.4
@@ -302,8 +302,8 @@ collision_monitor:
     cmd_vel_in_topic: "cmd_vel_smoothed"
     cmd_vel_out_topic: "cmd_vel"
     state_topic: "collision_monitor_state"
-    transform_tolerance: 0.2
-    source_timeout: 1.0
+    transform_tolerance: 0.5
+    source_timeout: 2.0
     base_shift_correction: True
     stop_pub_timeout: 2.0
     # Polygons represent zone around the robot for "stop", "slowdown" and "limit" action types,
