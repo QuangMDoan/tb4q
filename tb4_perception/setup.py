@@ -30,7 +30,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'yolo_detector_node = tb4_perception.yolo_detector_node:main'
+            'yolo_detector_node = tb4_perception.yolo_detector_node:main',
+            'tf_keepalive_node = tb4_perception.tf_keepalive_node:main',
         ],
     },
 )
