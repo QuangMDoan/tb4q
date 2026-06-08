@@ -27,7 +27,7 @@ controller_server:
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
-    failure_tolerance: 0.3
+    failure_tolerance: 2.0
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["general_goal_checker"]
     controller_plugins: ["FollowPath"]
@@ -163,7 +163,7 @@ local_costmap:
         mark_threshold: 0
         observation_sources: scan
         scan:
-          topic: scan
+          topic: scan_restamped
           max_obstacle_height: 2.0
           clearing: true
           marking: true
@@ -202,7 +202,7 @@ global_costmap:
         enabled: true
         observation_sources: scan
         scan:
-          topic: scan
+          topic: scan_restamped
           max_obstacle_height: 2.0
           clearing: true
           marking: true
@@ -323,7 +323,7 @@ collision_monitor:
     observation_sources: ["scan"]
     scan:
       type: "scan"
-      topic: "scan"
+      topic: "scan_restamped"
       min_height: 0.15
       max_height: 2.0
       enabled: True

@@ -30,7 +30,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'yolo_detector_node = tb4_perception.yolo_detector_node:main'
+            'yolo_detector_node = tb4_perception.yolo_detector_node:main',
+            'scan_restamper_node = tb4_perception.scan_restamper_node:main',
         ],
     },
 )
