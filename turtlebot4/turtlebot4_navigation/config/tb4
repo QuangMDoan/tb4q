@@ -83,6 +83,7 @@ Examples:
   tb4 teleop
   tb4 nav2
   tb4 nav2_diag
+  tb4 alive
   tb4 viz
   tb4 viz lite
   tb4 yolo
