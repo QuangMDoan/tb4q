@@ -29,7 +29,23 @@ amcl:
     save_pose_rate: 0.5
     sigma_hit: 0.2
     tf_broadcast: true
-    transform_tolerance: 1.0
+    # 2.0 (not 1.0): on the Pi, near-wall CPU spikes can stall AMCL for ~1s so it
+    # stops publishing map->odom; a 2s forward-projection keeps the last map->odom
+    # valid through the stall instead of the controller failing with
+    # 'extrapolation into the future' (odom->map) and aborting the goal.
+    transform_tolerance: 2.0
+    # Auto-localize at the dock on startup so onboard bringup needs no manual
+    # 2D Pose Estimate (publishes map->odom immediately). Pose captured via
+    # `ros2 run tf2_ros tf2_echo map base_link` while docked + localized.
+    # Assumes robot boots docked and the map's origin is the dock. If AMCL
+    # starts mislocalized (e.g. dock moved or different map), set 2D Pose
+    # Estimate once in RViz and recapture this pose.
+    set_initial_pose: true
+    initial_pose:
+      x: -0.044
+      y: -0.014
+      z: 0.0
+      yaw: -3.145
     update_min_a: 0.2
     update_min_d: 0.25
     z_hit: 0.5
