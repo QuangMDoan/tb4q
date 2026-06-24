@@ -5,8 +5,8 @@ bt_navigator:
     robot_base_frame: base_link
     odom_topic: odom
     bt_loop_duration: 10
-    default_server_timeout: 20
-    wait_for_service_timeout: 1000
+    default_server_timeout: 200
+    wait_for_service_timeout: 5000
     action_server_result_timeout: 900.0
     plugin_lib_names: ["turtlebot4_bt_plugins"]
     default_nav_to_pose_bt_xml: "/home/qd/turtlebot4_ws/install/turtlebot4_navigation/share/turtlebot4_navigation/behavior_trees/navigate_to_pose_no_reverse.xml"
@@ -34,8 +34,8 @@ controller_server:
     use_realtime_priority: false
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
-      required_movement_radius: 0.2
-      movement_time_allowance: 20.0
+      required_movement_radius: 0.3
+      movement_time_allowance: 15.0
     general_goal_checker:
       stateful: true
       plugin: "nav2_controller::SimpleGoalChecker"
@@ -43,9 +43,9 @@ controller_server:
       yaw_goal_tolerance: 0.25
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
-      time_steps: 56
+      time_steps: 36
       model_dt: 0.05
-      batch_size: 2000
+      batch_size: 1000
       ax_max: 3.0
       ax_min: -3.0
       ay_max: 3.0
@@ -59,7 +59,7 @@ controller_server:
       wz_max: 1.9
       iteration_count: 1
       prune_distance: 1.7
-      transform_tolerance: 1.0
+      transform_tolerance: 0.5
       temperature: 0.3
       gamma: 0.015
       motion_model: "DiffDrive"
@@ -98,7 +98,7 @@ controller_server:
         cost_power: 1
         cost_weight: 3.81
         critical_cost: 300.0
-        consider_footprint: true
+        consider_footprint: false
         collision_cost: 1000000.0
         near_goal_distance: 1.0
         trajectory_point_step: 2
@@ -134,7 +134,7 @@ local_costmap:
       publish_frequency: 2.0
       global_frame: odom
       robot_base_frame: base_link
-      transform_tolerance: 1.0
+      transform_tolerance: 0.5
       rolling_window: true
       width: 3
       height: 3
@@ -151,7 +151,7 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 4.0
-        inflation_radius: 0.25
+        inflation_radius: 0.3
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: true
@@ -185,7 +185,7 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_link
-      transform_tolerance: 1.0
+      transform_tolerance: 0.5
       footprint: "[[ 0.189,  0.000],
                   [ 0.134, -0.134],
                   [ 0.000, -0.189],
@@ -217,7 +217,7 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 4.0
-        inflation_radius: 0.25 
+        inflation_radius: 0.3
       always_send_full_costmap: true
 
 planner_server:
@@ -263,7 +263,7 @@ behavior_server:
     global_frame: map
     local_frame: odom
     robot_base_frame: base_link
-    transform_tolerance: 1.0
+    transform_tolerance: 0.5
     simulate_ahead_time: 2.0
     max_rotational_vel: 1.0
     min_rotational_vel: 0.4
@@ -304,8 +304,8 @@ collision_monitor:
     cmd_vel_in_topic: "cmd_vel_smoothed"
     cmd_vel_out_topic: "cmd_vel"
     state_topic: "collision_monitor_state"
-    transform_tolerance: 1.0
-    source_timeout: 2.0
+    transform_tolerance: 0.5
+    source_timeout: 1.5
     base_shift_correction: True
     stop_pub_timeout: 2.0
     # Polygons represent zone around the robot for "stop", "slowdown" and "limit" action types,
