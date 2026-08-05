@@ -14,7 +14,9 @@ find_package(nav2_costmap_2d REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(behaviortree_cpp REQUIRED)
+find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(geometry_msgs REQUIRED)
 
 # ── Message generation ────────────────────────────────────────
 rosidl_generate_interfaces(${PROJECT_NAME}
@@ -40,6 +42,9 @@ ament_target_dependencies(perception_layer
   nav2_costmap_2d
   pluginlib
   std_msgs
+  tf2
+  tf2_ros
+  geometry_msgs
 )
 
 # Link the generated message typesupport into the plugin library
@@ -114,7 +119,9 @@ ament_export_dependencies(
   pluginlib
   std_msgs
   behaviortree_cpp
+  tf2
   tf2_ros
+  geometry_msgs
 )
 
 ament_package()

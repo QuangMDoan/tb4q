@@ -8,14 +8,11 @@ bt_navigator:
     default_server_timeout: 200
     wait_for_service_timeout: 1000
     action_server_result_timeout: 900.0
-    plugin_lib_names: ["turtlebot4_bt_plugins"]
+    plugin_lib_names: ["turtlebot4_bt_plugins", "is_stop_sign_nearby_bt_node"]
     default_nav_to_pose_bt_xml: "/home/qd/turtlebot4_ws/install/turtlebot4_navigation/share/turtlebot4_navigation/behavior_trees/navigate_to_pose_no_reverse.xml"
-    default_nav_through_poses_bt_xml: "/home/qd/turtlebot4_ws/install/turtlebot4_navigation/share/turtlebot4_navigation/behavior_trees/navigate_through_poses_no_reverse.xml"
-    navigators: ["navigate_to_pose", "navigate_through_poses"]
+    navigators: ["navigate_to_pose"]
     navigate_to_pose:
       plugin: "nav2_bt_navigator::NavigateToPoseNavigator"
-    navigate_through_poses:
-      plugin: "nav2_bt_navigator::NavigateThroughPosesNavigator"
     error_code_names:
       - compute_path_error_code
       - follow_path_error_code
@@ -35,7 +32,7 @@ controller_server:
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
       required_movement_radius: 0.3
-      movement_time_allowance: 30.0
+      movement_time_allowance: 15.0
     general_goal_checker:
       stateful: true
       plugin: "nav2_controller::SimpleGoalChecker"
@@ -53,6 +50,10 @@ controller_server:
       use_velocity_scaled_lookahead_dist: true
       min_approach_linear_velocity: 0.05
       approach_velocity_scaling_dist: 0.6
+      # Do NOT abort on collision here: RPP's collision-abort + 1 Hz replanning
+      # preempts FollowPath every cycle, resetting the progress checker and
+      # livelocking so recovery never runs. The collision_monitor
+      # (FootprintApproach) is the safety stop instead.
       use_collision_detection: true
       max_allowed_time_to_collision_up_to_carrot: 1.0
       use_regulated_linear_velocity_scaling: true
@@ -96,11 +97,19 @@ local_costmap:
         default_radius: 0.3
         class_names: ['person', 'chair', 'dog', 'cat', 'bicycle', 'stop sign']
         class_costs: [254, 254, 200, 180, 254, 254]
-        class_radii: [0.3, 0.25, 0.2, 0.15, 0.4, 0.3]
+        class_radii: [0.3, 0.25, 0.2, 0.15, 0.4, 0.5]
+        # Classes latched as persistent keep-out zones (survive loss of
+        # sight and costmap clearing) so the robot routes around them.
+        persistent_classes: ['stop sign']
+        persistent_frame: 'map'
+        persistent_timeout: 600.0
+        # Ignore detections whose centre is within this distance (m) of the
+        # robot so a box stamped on the robot cannot self-block navigation.
+        min_obstacle_distance: 0.35
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.20
+        inflation_radius: 0.15
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: true
@@ -172,11 +181,19 @@ global_costmap:
         default_radius: 0.3
         class_names: ['person', 'chair', 'dog', 'cat', 'bicycle', 'stop sign']
         class_costs: [254, 254, 200, 180, 254, 254]
-        class_radii: [0.3, 0.25, 0.2, 0.15, 0.4, 0.3]
+        class_radii: [0.3, 0.25, 0.2, 0.15, 0.4, 0.5]
+        # Classes latched as persistent keep-out zones (survive loss of
+        # sight and costmap clearing) so the robot routes around them.
+        persistent_classes: ['stop sign']
+        persistent_frame: 'map'
+        persistent_timeout: 600.0
+        # Ignore detections whose centre is within this distance (m) of the
+        # robot so a box stamped on the robot cannot self-block navigation.
+        min_obstacle_distance: 0.35
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.20
+        inflation_radius: 0.15
       always_send_full_costmap: true
 
 planner_server:

@@ -41,6 +41,7 @@ Usage:
   tb4 deploy plugins
   tb4 deploy onboard [full]
   tb4 onboard up
+  tb4 onboard down
   tb4 alive
   tb4 viz
   tb4 viz lite
@@ -97,6 +98,7 @@ Examples:
   tb4 deploy plugins
   tb4 deploy onboard full
   tb4 onboard up
+  tb4 onboard down
   tb4 alive
   tb4 viz
   tb4 viz lite
@@ -371,6 +373,17 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM HUP
 
+# Pre-flight: kill any stale localization/nav2 processes left over from a
+# previously Ctrl-C'd 'tb4 onboard up'. Orphans survive when the SSH trap does
+# not propagate, and a second copy of each node starves the Pi and collides on
+# DDS names -> lifecycle 'get_state' timeouts and aborted bringup.
+STALE_PROCS="controller_server|smoother_server|planner_server|behavior_server|bt_navigator|waypoint_follower|velocity_smoother|collision_monitor|lifecycle_manager|amcl|map_server|localization.launch.py|navigation_no_docking.launch.py|nav2.launch.py"
+if pgrep -f "$STALE_PROCS" >/dev/null 2>&1; then
+  echo "[onboard up] cleaning up stale localization/nav2 processes..."
+  pkill -f "$STALE_PROCS" 2>/dev/null || true
+  sleep 3
+fi
+
 # Disable the Create 3's motion-control reflexes (cliff/wheel-drop/backup limit)
 # so Nav2 recovery (e.g. blind reverse) is not blocked by the base. Must be the
 # first ros2 action so it takes effect before navigation starts.
@@ -460,6 +473,17 @@ REMOTE
 
   printf '%s\n' "$remote_script" | ssh ubuntu@turtlebot4 'cat > /tmp/tb4_onboard_up.sh'
   ssh -t ubuntu@turtlebot4 'bash /tmp/tb4_onboard_up.sh'
+}
+
+onboard_down_cmd() {
+  # Kill any localization/nav2 processes on the robot. Use this to clean up
+  # after a Ctrl-C'd 'tb4 onboard up' that left orphaned nodes behind.
+  local stale_procs="controller_server|smoother_server|planner_server|behavior_server|bt_navigator|waypoint_follower|velocity_smoother|collision_monitor|lifecycle_manager|amcl|map_server|localization.launch.py|navigation_no_docking.launch.py|nav2.launch.py"
+  echo "Stopping onboard localization + nav2 on the robot..."
+  ssh ubuntu@turtlebot4 "pkill -f '$stale_procs' 2>/dev/null; sleep 2; \
+    source /opt/ros/jazzy/setup.bash 2>/dev/null; \
+    echo '--- remaining ROS nodes ---'; ros2 node list 2>/dev/null || true"
+  echo "Done."
 }
 
 alive_cmd() {
@@ -761,7 +785,8 @@ case "${1:-}" in
     shift
     case "${1:-}" in
       up) shift; onboard_up_cmd "$@" ;;
-      *) echo "Unknown onboard subcommand: ${1:-}"; echo "Usage: tb4 onboard up"; exit 1 ;;
+      down) shift; onboard_down_cmd "$@" ;;
+      *) echo "Unknown onboard subcommand: ${1:-}"; echo "Usage: tb4 onboard up|down"; exit 1 ;;
     esac
     ;;
   alive)

@@ -31,6 +31,8 @@ public:
         "SemanticObstacleArray topic"),
       BT::InputPort<std::string>("global_frame", "map",
         "Global frame for distance computation"),
+      BT::InputPort<double>("rearm_clear_time", 1.5,
+        "Seconds a stop sign must stay clear before the latch re-arms"),
     };
   }
 
@@ -43,8 +45,12 @@ private:
   rclcpp::Node::SharedPtr node_;
   rclcpp::Subscription<msg::SemanticObstacleArray>::SharedPtr sub_;
   std::mutex mutex_;
-  bool stop_sign_nearby_{false};
+  // Timestamp of the most recent tick where a stop sign was within range.
+  rclcpp::Time last_nearby_stamp_{0, 0, RCL_ROS_TIME};
+  // Edge-triggered latch: fire SUCCESS once, then suppress until re-armed.
+  bool armed_{true};
   double distance_threshold_{2.0};
+  double rearm_clear_time_{1.5};
   bool initialized_{false};
 };
 

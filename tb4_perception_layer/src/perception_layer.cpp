@@ -22,6 +22,8 @@
 
 #include "nav2_costmap_2d/costmap_math.hpp"
 #include "pluginlib/class_list_macros.hpp"
+#include "geometry_msgs/msg/transform_stamped.hpp"
+#include "tf2_ros/buffer.h"
 
 PLUGINLIB_EXPORT_CLASS(tb4_perception_layer::PerceptionLayer, nav2_costmap_2d::Layer)
 
@@ -45,6 +47,12 @@ void PerceptionLayer::onInitialize()
   declareParameter("class_names", rclcpp::ParameterValue(std::vector<std::string>()));
   declareParameter("class_costs", rclcpp::ParameterValue(std::vector<int64_t>()));
   declareParameter("class_radii", rclcpp::ParameterValue(std::vector<double>()));
+  declareParameter(
+    "persistent_classes",
+    rclcpp::ParameterValue(std::vector<std::string>({"stop sign"})));
+  declareParameter("persistent_frame", rclcpp::ParameterValue("map"));
+  declareParameter("persistent_timeout", rclcpp::ParameterValue(600.0));
+  declareParameter("min_obstacle_distance", rclcpp::ParameterValue(0.35));
 
   bool enabled = true;
   node->get_parameter(name_ + ".enabled", enabled);
@@ -52,6 +60,10 @@ void PerceptionLayer::onInitialize()
 
   node->get_parameter(name_ + ".semantic_topic", semantic_topic_);
   node->get_parameter(name_ + ".obstacle_timeout", obstacle_timeout_);
+  node->get_parameter(name_ + ".persistent_classes", persistent_classes_);
+  node->get_parameter(name_ + ".persistent_frame", persistent_frame_);
+  node->get_parameter(name_ + ".persistent_timeout", persistent_timeout_);
+  node->get_parameter(name_ + ".min_obstacle_distance", min_obstacle_distance_);
 
   int default_cost_int = 254;
   node->get_parameter(name_ + ".default_cost", default_cost_int);
@@ -96,9 +108,12 @@ void PerceptionLayer::obstacleCallback(
   std::lock_guard<std::mutex> lock(mutex_);
   obstacles_.clear();
 
+  const std::string msg_frame = msg->header.frame_id;
+
   for (const auto & obs : msg->obstacles) {
     CachedObstacle cached;
     cached.class_id = obs.class_id;
+    cached.frame_id = obs.header.frame_id.empty() ? msg_frame : obs.header.frame_id;
     cached.x = obs.x;
     cached.y = obs.y;
     cached.radius = (obs.radius > 0.0) ? obs.radius : radiusForClass(obs.class_id);
@@ -107,11 +122,46 @@ void PerceptionLayer::obstacleCallback(
       : costForClass(obs.class_id);
     cached.stamp = rclcpp::Time(obs.header.stamp);
     obstacles_.push_back(cached);
+
+    if (!isPersistentClass(obs.class_id)) {continue;}
+
+    // Latch the keep-out zone in a fixed frame (e.g. map) so it survives
+    // loss of sight and costmap clearing.
+    double px, py;
+    if (!transformPoint(cached.frame_id, persistent_frame_, cached.x, cached.y, px, py)) {
+      continue;  // transform unavailable this cycle; will latch on a later message
+    }
+
+    CachedObstacle keepout = cached;
+    keepout.frame_id = persistent_frame_;
+    keepout.x = px;
+    keepout.y = py;
+
+    // De-duplicate: merge with an existing latched zone of the same class
+    // if it is within half a radius, otherwise append.
+    bool merged = false;
+    for (auto & existing : persistent_obstacles_) {
+      if (existing.class_id != keepout.class_id) {continue;}
+      if (std::hypot(existing.x - keepout.x, existing.y - keepout.y) <=
+        0.5 * keepout.radius)
+      {
+        existing.x = keepout.x;
+        existing.y = keepout.y;
+        existing.radius = keepout.radius;
+        existing.cost = keepout.cost;
+        existing.stamp = keepout.stamp;
+        merged = true;
+        break;
+      }
+    }
+    if (!merged) {
+      persistent_obstacles_.push_back(keepout);
+    }
   }
 }
 
 void PerceptionLayer::updateBounds(
-  double /*robot_x*/, double /*robot_y*/, double /*robot_yaw*/,
+  double robot_x, double robot_y, double /*robot_yaw*/,
   double * min_x, double * min_y,
   double * max_x, double * max_y)
 {
@@ -121,18 +171,32 @@ void PerceptionLayer::updateBounds(
   auto node = node_.lock();
   if (!node) {return;}
 
+  const std::string global_frame = layered_costmap_->getGlobalFrameID();
   rclcpp::Time now = node->get_clock()->now();
 
-  for (const auto & obs : obstacles_) {
-    double age = (now - obs.stamp).seconds();
-    if (age > obstacle_timeout_) {continue;}
+  // Remember the robot pose (already in the costmap's global frame) so
+  // updateCosts() can apply the same min-distance filter.
+  robot_gx_ = robot_x;
+  robot_gy_ = robot_y;
+  have_robot_pose_ = true;
 
-    double r = obs.radius;
-    *min_x = std::min(*min_x, obs.x - r);
-    *min_y = std::min(*min_y, obs.y - r);
-    *max_x = std::max(*max_x, obs.x + r);
-    *max_y = std::max(*max_y, obs.y + r);
-  }
+  auto expand = [&](const CachedObstacle & obs, double timeout) {
+      double age = (now - obs.stamp).seconds();
+      if (age > timeout) {return;}
+      double wx, wy;
+      if (!transformPoint(obs.frame_id, global_frame, obs.x, obs.y, wx, wy)) {return;}
+      // Ignore detections stamped on top of the robot so they cannot
+      // self-block navigation.
+      if (std::hypot(wx - robot_x, wy - robot_y) < min_obstacle_distance_) {return;}
+      double r = obs.radius;
+      *min_x = std::min(*min_x, wx - r);
+      *min_y = std::min(*min_y, wy - r);
+      *max_x = std::max(*max_x, wx + r);
+      *max_y = std::max(*max_y, wy + r);
+    };
+
+  for (const auto & obs : obstacles_) {expand(obs, obstacle_timeout_);}
+  for (const auto & obs : persistent_obstacles_) {expand(obs, persistent_timeout_);}
 }
 
 void PerceptionLayer::updateCosts(
@@ -146,55 +210,73 @@ void PerceptionLayer::updateCosts(
   auto node = node_.lock();
   if (!node) {return;}
 
+  const std::string global_frame = layered_costmap_->getGlobalFrameID();
   rclcpp::Time now = node->get_clock()->now();
   double resolution = master_grid.getResolution();
 
-  for (const auto & obs : obstacles_) {
-    double age = (now - obs.stamp).seconds();
-    if (age > obstacle_timeout_) {continue;}
+  auto stamp = [&](const CachedObstacle & obs, double timeout) {
+      double age = (now - obs.stamp).seconds();
+      if (age > timeout) {return;}
 
-    // Convert world position to map cell
-    unsigned int mx, my;
-    if (!master_grid.worldToMap(obs.x, obs.y, mx, my)) {
-      continue;  // obstacle is outside the costmap
-    }
+      // Transform the obstacle into the costmap's global frame.
+      double wx, wy;
+      if (!transformPoint(obs.frame_id, global_frame, obs.x, obs.y, wx, wy)) {return;}
 
-    double r = obs.radius;
-    int cell_radius = static_cast<int>(std::ceil(r / resolution));
+      // Ignore detections stamped on top of the robot so they cannot
+      // self-block navigation (mirrors the filter in updateBounds).
+      if (have_robot_pose_ &&
+        std::hypot(wx - robot_gx_, wy - robot_gy_) < min_obstacle_distance_)
+      {
+        return;
+      }
 
-    int cx = static_cast<int>(mx);
-    int cy = static_cast<int>(my);
+      // Convert world position to map cell
+      unsigned int mx, my;
+      if (!master_grid.worldToMap(wx, wy, mx, my)) {
+        return;  // obstacle is outside the costmap
+      }
 
-    for (int dy = -cell_radius; dy <= cell_radius; ++dy) {
-      for (int dx = -cell_radius; dx <= cell_radius; ++dx) {
-        int px = cx + dx;
-        int py = cy + dy;
+      double r = obs.radius;
+      int cell_radius = static_cast<int>(std::ceil(r / resolution));
 
-        if (px < min_i || px >= max_i || py < min_j || py >= max_j) {
-          continue;
-        }
+      int cx = static_cast<int>(mx);
+      int cy = static_cast<int>(my);
 
-        // Check circular footprint
-        double dist = std::hypot(dx * resolution, dy * resolution);
-        if (dist > r) {continue;}
+      for (int dy = -cell_radius; dy <= cell_radius; ++dy) {
+        for (int dx = -cell_radius; dx <= cell_radius; ++dx) {
+          int px = cx + dx;
+          int py = cy + dy;
 
-        unsigned char old_cost = master_grid.getCost(
-          static_cast<unsigned int>(px), static_cast<unsigned int>(py));
-        if (obs.cost > old_cost) {
-          master_grid.setCost(
-            static_cast<unsigned int>(px),
-            static_cast<unsigned int>(py),
-            obs.cost);
+          if (px < min_i || px >= max_i || py < min_j || py >= max_j) {
+            continue;
+          }
+
+          // Check circular footprint
+          double dist = std::hypot(dx * resolution, dy * resolution);
+          if (dist > r) {continue;}
+
+          unsigned char old_cost = master_grid.getCost(
+            static_cast<unsigned int>(px), static_cast<unsigned int>(py));
+          if (obs.cost > old_cost) {
+            master_grid.setCost(
+              static_cast<unsigned int>(px),
+              static_cast<unsigned int>(py),
+              obs.cost);
+          }
         }
       }
-    }
-  }
+    };
+
+  for (const auto & obs : obstacles_) {stamp(obs, obstacle_timeout_);}
+  for (const auto & obs : persistent_obstacles_) {stamp(obs, persistent_timeout_);}
 }
 
 void PerceptionLayer::reset()
 {
   std::lock_guard<std::mutex> lock(mutex_);
   obstacles_.clear();
+  // Note: persistent_obstacles_ are intentionally NOT cleared here so that
+  // latched keep-out zones (e.g. stop signs) survive costmap resets/clears.
   current_ = false;
 }
 
@@ -208,6 +290,43 @@ double PerceptionLayer::radiusForClass(const std::string & class_id) const
 {
   auto it = class_radius_map_.find(class_id);
   return (it != class_radius_map_.end()) ? it->second : default_radius_;
+}
+
+bool PerceptionLayer::isPersistentClass(const std::string & class_id) const
+{
+  return std::find(
+    persistent_classes_.begin(), persistent_classes_.end(), class_id) !=
+         persistent_classes_.end();
+}
+
+bool PerceptionLayer::transformPoint(
+  const std::string & from_frame, const std::string & to_frame,
+  double in_x, double in_y, double & out_x, double & out_y) const
+{
+  if (from_frame.empty() || from_frame == to_frame) {
+    out_x = in_x;
+    out_y = in_y;
+    return true;
+  }
+  if (!tf_) {return false;}
+
+  geometry_msgs::msg::TransformStamped tf;
+  try {
+    tf = tf_->lookupTransform(to_frame, from_frame, tf2::TimePointZero);
+  } catch (const tf2::TransformException &) {
+    return false;
+  }
+
+  // Extract yaw directly from the quaternion (2-D transform only).
+  const auto & q = tf.transform.rotation;
+  const double yaw = std::atan2(
+    2.0 * (q.w * q.z + q.x * q.y),
+    1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+  const double c = std::cos(yaw);
+  const double s = std::sin(yaw);
+  out_x = tf.transform.translation.x + c * in_x - s * in_y;
+  out_y = tf.transform.translation.y + s * in_x + c * in_y;
+  return true;
 }
 
 }  // namespace tb4_perception_layer
