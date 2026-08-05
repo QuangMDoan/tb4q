@@ -264,12 +264,27 @@ nav2_cmd() {
 # Robot paths: overlay ws = ~/tb4_overlay_ws (bt plugins), config = ~/tb4_cfg.
 
 deploy_plugins_cmd() {
-  local src="$HOME/turtlebot4_ws/src/turtlebot4/turtlebot4_bt_plugins"
-  echo "Deploying turtlebot4_bt_plugins to robot overlay workspace..."
-  ssh ubuntu@turtlebot4 'rm -rf ~/tb4_overlay_ws/src/turtlebot4_bt_plugins && mkdir -p ~/tb4_overlay_ws/src'
-  scp -r "$src" ubuntu@turtlebot4:'~/tb4_overlay_ws/src/'
+  # Nav2 runs onboard the robot (Pi). It must load two custom overlay packages:
+  #   - turtlebot4_bt_plugins : behavior-tree action/condition nodes
+  #   - tb4_perception_layer  : semantic costmap layer + SemanticObstacle msgs
+  # The perception layer is enabled in nav2.yaml and subscribes to
+  # /semantic_obstacles published by the fusion node on the UserPC, so BOTH the
+  # plugin .so AND the message typesupport must be built/installed on the Pi.
+  local pkgs=(
+    "$HOME/turtlebot4_ws/src/turtlebot4/turtlebot4_bt_plugins"
+    "$HOME/turtlebot4_ws/src/tb4_perception_layer"
+  )
+  echo "Deploying Nav2 overlay packages to robot (bt plugins + perception layer)..."
+  ssh ubuntu@turtlebot4 'mkdir -p ~/tb4_overlay_ws/src'
+  local src name
+  for src in "${pkgs[@]}"; do
+    name="$(basename "$src")"
+    echo "  -> $name"
+    ssh ubuntu@turtlebot4 "rm -rf ~/tb4_overlay_ws/src/$name"
+    scp -r "$src" ubuntu@turtlebot4:'~/tb4_overlay_ws/src/'
+  done
   echo "Building overlay on robot (this may take a few minutes)..."
-  ssh -t ubuntu@turtlebot4 'source /opt/ros/jazzy/setup.bash && cd ~/tb4_overlay_ws && colcon build --packages-select turtlebot4_bt_plugins'
+  ssh -t ubuntu@turtlebot4 'source /opt/ros/jazzy/setup.bash && cd ~/tb4_overlay_ws && colcon build --packages-select turtlebot4_bt_plugins tb4_perception_layer'
 }
 
 deploy_onboard_cmd() {
@@ -300,7 +315,24 @@ deploy_onboard_cmd() {
   fi
 
   rm -f "$tmp_nav2"
-  echo "Done. Run 'tb4 onboard up' (or 'tb4 localize onboard' + 'tb4 nav2 onboard')."
+
+  # nav2.yaml enables tb4_perception_layer, which onboard nav2 loads from the
+  # robot overlay (~/tb4_overlay_ws). Verify it is present so the costmap does
+  # not fail to bring up when 'tb4 onboard up' runs.
+  echo "Verifying perception layer overlay on robot..."
+  if ssh ubuntu@turtlebot4 'test -d ~/tb4_overlay_ws/install/tb4_perception_layer'; then
+    echo "  OK: tb4_perception_layer is built in the robot overlay."
+  else
+    echo "  WARN: tb4_perception_layer is NOT built on the robot overlay."
+    echo "        nav2.yaml enables perception_layer, so onboard nav2 must load it."
+    echo "        Run 'tb4 deploy plugins' before 'tb4 onboard up'."
+  fi
+
+  echo
+  echo "Done. Onboard Nav2 will subscribe to /semantic_obstacles."
+  echo "Perception runs on the UserPC:  tb4 yolo   and   tb4 fusion"
+  echo "Then start navigation onboard:  tb4 onboard up"
+  echo "(RViz on the UserPC: tb4 viz)"
 }
 
 localize_onboard_cmd() {
@@ -331,36 +363,84 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM HUP
 
+# Disable the Create 3's motion-control reflexes (cliff/wheel-drop/backup limit)
+# so Nav2 recovery (e.g. blind reverse) is not blocked by the base. Must be the
+# first ros2 action so it takes effect before navigation starts.
+echo "[onboard up] setting Create 3 safety_override=full..."
+ros2 param set --include-hidden-nodes /_do_not_use/motion_control safety_override full \
+  || echo "[onboard up] WARN: failed to set safety_override (continuing)."
+
 echo "[onboard up] starting localization..."
-ros2 launch turtlebot4_navigation localization.launch.py \
+ros2 launch nav2_bringup localization_launch.py \
   map:="$HOME/tb4_cfg/maps/map_101.yaml" \
-  params:="$HOME/tb4_cfg/localization.yaml" &
+  params_file:="$HOME/tb4_cfg/localization.yaml" \
+  autostart:=false &
 LOCALIZE_PID=$!
 
-# AMCL has set_initial_pose=False, so it does NOT publish map->odom until a
-# "2D Pose Estimate" is set in RViz. Nav2's global_costmap has a 60s activation
-# timeout, so nav2 MUST NOT start before map->odom exists. Wait until it does.
+wait_for_lifecycle_node() {
+  local node="$1"
+  local waited=0
+  while ! timeout 8 ros2 lifecycle get "$node" >/dev/null 2>&1; do
+    waited=$((waited + 2))
+    if [ "$waited" -ge 60 ]; then
+      echo "[onboard up] ERROR: lifecycle node $node did not appear." >&2
+      return 1
+    fi
+    sleep 2
+  done
+}
+
+set_lifecycle_state() {
+  local node="$1"
+  local state="$2"
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if timeout 20 ros2 lifecycle set "$node" "$state"; then
+      return 0
+    fi
+    echo "[onboard up] WARN: failed to set $node -> $state (attempt $attempt/5)."
+    sleep 2
+  done
+  echo "[onboard up] ERROR: failed to set $node -> $state." >&2
+  return 1
+}
+
+wait_for_lifecycle_node /map_server || exit 1
+wait_for_lifecycle_node /amcl || exit 1
+set_lifecycle_state /map_server configure || exit 1
+set_lifecycle_state /amcl configure || exit 1
+set_lifecycle_state /map_server activate || exit 1
+set_lifecycle_state /amcl activate || exit 1
+
+# AMCL auto-localizes at the dock and publishes map->odom after it processes
+# lidar scans. Nav2's global_costmap has a 60s activation timeout, so nav2 MUST
+# NOT start before map->odom exists. Wait until it does.
 echo
 echo "==================================================================="
-echo "[onboard up] Localization started. In RViz on the UserPC, set the"
-echo "             '2D Pose Estimate' on the robot's location now."
+echo "[onboard up] Localization is active."
 echo "             Waiting for map->odom transform before starting nav2..."
 echo "==================================================================="
 WAIT_MAX=600
-waited=0
+SECONDS=0
+next_msg=10
 while true; do
-  if timeout 2 ros2 run tf2_ros tf2_echo map odom 2>/dev/null | grep -q "Translation:"; then
+  # Each fresh tf2_echo node needs several seconds to spin up, discover the
+  # FastDDS server and fill its TF buffer on the Pi, so allow up to 12s per
+  # attempt (a 2s timeout kills it before map->odom is ever seen even when the
+  # transform exists).
+  if timeout 12 ros2 run tf2_ros tf2_echo map odom 2>/dev/null | grep -q "Translation:"; then
     echo "[onboard up] map->odom TF available; starting nav2."
     break
   fi
-  waited=$((waited + 2))
-  if [ "$waited" -ge "$WAIT_MAX" ]; then
+  if [ "$SECONDS" -ge "$WAIT_MAX" ]; then
     echo "[onboard up] ERROR: map->odom not available after ${WAIT_MAX}s." >&2
-    echo "[onboard up] Set the 2D Pose Estimate in RViz, then rerun. Aborting." >&2
+    echo "[onboard up] AMCL auto-localizes at the dock; if the robot isn't" >&2
+    echo "[onboard up] docked, set a 2D Pose Estimate in RViz, then rerun. Aborting." >&2
     exit 1
   fi
-  if [ $((waited % 10)) -eq 0 ]; then
-    echo "[onboard up] still waiting for map->odom (${waited}s)... set 2D Pose Estimate in RViz."
+  if [ "$SECONDS" -ge "$next_msg" ]; then
+    echo "[onboard up] still waiting for map->odom (${SECONDS}s)..."
+    next_msg=$((SECONDS + 10))
   fi
   sleep 1
 done
