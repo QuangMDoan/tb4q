@@ -48,6 +48,10 @@ Usage:
   tb4 yolo viz
   tb4 fusion
   tb4 fusion viz
+  tb4 bbox
+  tb4 bbox viz
+  tb4 bbox yolo-viz
+  tb4 bbox fusion-viz
   tb4 rgb_cam_rate
   tb4 bbox_rate
   tb4 depth_cam_rate
@@ -100,6 +104,10 @@ Examples:
   tb4 yolo viz
   tb4 fusion
   tb4 fusion viz
+  tb4 bbox
+  tb4 bbox viz
+  tb4 bbox yolo-viz
+  tb4 bbox fusion-viz
   tb4 rgb_cam_rate
   tb4 bbox_rate
   tb4 depth_cam_rate
@@ -520,6 +528,43 @@ fusion_cmd() {
   fi
 }
 
+bbox_cmd() {
+  # Start the YOLO detector node and the camera-LiDAR fusion node together.
+  #   tb4 bbox                          -> both nodes, no visualisation
+  #   tb4 bbox viz                      -> both nodes with visualisation/debug markers
+  #   tb4 bbox yolo-viz                 -> only YOLO visualisation enabled
+  #   tb4 bbox fusion-viz               -> only fusion debug markers enabled
+  #   tb4 bbox yolo-viz fusion-viz      -> same as 'viz'
+  local yolo_arg="" fusion_arg=""
+  for arg in "$@"; do
+    case "$arg" in
+      viz)         yolo_arg="viz"; fusion_arg="viz" ;;
+      yolo-viz)    yolo_arg="viz" ;;
+      fusion-viz)  fusion_arg="viz" ;;
+      *)
+        echo "Unknown bbox option: '$arg' (use: viz | yolo-viz | fusion-viz)"
+        exit 1
+        ;;
+    esac
+  done
+
+  local pids=()
+  cleanup() {
+    kill "${pids[@]}" 2>/dev/null || true
+    wait "${pids[@]}" 2>/dev/null || true
+  }
+  trap cleanup INT TERM EXIT
+
+  yolo_cmd "$yolo_arg" &
+  pids+=("$!")
+
+  fusion_cmd "$fusion_arg" &
+  pids+=("$!")
+
+  # Exit as soon as either node stops, then clean up the other.
+  wait -n "${pids[@]}"
+}
+
 rgb_cam_rate_cmd() {
   timeout 8 ros2 topic hz /oakd/rgb/preview/image_raw --window 10
 }
@@ -747,6 +792,10 @@ case "${1:-}" in
   fusion)
     shift
     fusion_cmd "$@"
+    ;;
+  bbox)
+    shift
+    bbox_cmd "$@"
     ;;
   rgb_cam_rate)
     shift
