@@ -86,7 +86,17 @@ local_costmap:
                   [-0.134,  0.134],
                   [ 0.000,  0.189],
                   [ 0.134,  0.134]]"
-      plugins: ["static_layer", "voxel_layer", "inflation_layer"]
+      plugins: ["static_layer", "voxel_layer", "perception_layer", "inflation_layer"]
+      perception_layer:
+        plugin: "tb4_perception_layer::PerceptionLayer"
+        enabled: true
+        semantic_topic: "/semantic_obstacles"
+        obstacle_timeout: 3.0
+        default_cost: 254
+        default_radius: 0.3
+        class_names: ['person', 'chair', 'dog', 'cat', 'bicycle', 'stop sign']
+        class_costs: [254, 254, 200, 180, 254, 254]
+        class_radii: [0.3, 0.25, 0.2, 0.15, 0.4, 0.3]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
@@ -135,7 +145,7 @@ global_costmap:
                   [ 0.134,  0.134]]"
       resolution: 0.06
       track_unknown_space: true
-      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      plugins: ["static_layer", "obstacle_layer", "perception_layer", "inflation_layer"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
@@ -153,6 +163,16 @@ global_costmap:
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: true
+      perception_layer:
+        plugin: "tb4_perception_layer::PerceptionLayer"
+        enabled: true
+        semantic_topic: "/semantic_obstacles"
+        obstacle_timeout: 3.0
+        default_cost: 254
+        default_radius: 0.3
+        class_names: ['person', 'chair', 'dog', 'cat', 'bicycle', 'stop sign']
+        class_costs: [254, 254, 200, 180, 254, 254]
+        class_radii: [0.3, 0.25, 0.2, 0.15, 0.4, 0.3]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
